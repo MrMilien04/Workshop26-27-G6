@@ -1,0 +1,21 @@
+---
+- name: Playbook de Remédiation Autonome (Zero-Touch Recovery)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: 1. Journalisation de la prise en charge SIEM/SOAR
+      debug:
+        msg: "Exécution de la remédiation automatique suite à l'alerte ML AIOps"
+
+    - name: 2. Rétablissement de l'état opérationnel du microservice Payment API
+      uri:
+        url: "http://payment-api:8000/api/chaos/restore"
+        method: POST
+        status_code: 200
+
+    - name: 3. Vérification post-remédiation (Healthcheck métier)
+      uri:
+        url: "http://payment-api:8000/api/health"
+        method: GET
+        status_code: 200

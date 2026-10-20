@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>RESILIENCE-ALPHA | Supervision & Paiement</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+
+<body class="bg-slate-900 text-slate-100 min-h-screen p-6">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const {useState, useEffect} = React;
+        const API_BASE = `http://${window.location.hostname}`;
+        const SIEM_BASE = `http://${window.location.hostname}:8090`;
+        const RAG_BASE = `http://${window.location.hostname}:8095`;
+
+        function App() {
+            const [health, setHealth] = useState("CHECKING");
+            const [transactions, setTransactions] = useState([]);
+            const [events, setEvents] = useState([]);
+            const [amount, setAmount] = useState(49.99);
+            const [statusMsg, setStatusMsg] = useState("");
+            const [question, setQuestion] = useState("Quelle est la procédure de reprise et quels sont nos objectifs RTO/RPO ?");
+            const [ragAnswer, setRagAnswer] = useState("");
+            const [ragLoading, setRagLoading] = useState(false);
+
+            const fetchStatus = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/health`);
+                    if (res.ok) setHealth("OPERATIONAL");
+                    else setHealth("DEGRADED / DOWN");
+                } catch (e) {
+                    setHealth("DEGRADED / DOWN");
+                }
+
+                try {
+                    const txRes = await fetch(`${API_BASE}/api/transactions`);
+                    if (txRes.ok) setTransactions(await txRes.json());
+                } catch (e) { }
+
+                try {
+                    const evRes = await fetch(`${SIEM_BASE}/remediate/events`);
+                    if (evRes.ok) setEvents(await evRes.json());
+                } catch (e) { }
+            };
+
+            useEffect(() => {
+                fetchStatus();
+                const interval = setInterval(fetchStatus, 1500);
+                return () => clearInterval(interval);
+            }, []);
+
+            const triggerPayment = async () => {
+                setStatusMsg("Traitement en cours...");
+                try {
+                    const authRes = await fetch(`${API_BASE}/auth/token`, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({username: "merchant_alpha", password: "pass_alpha_2026"})
+                    });
+                    const {access_token} = await authRes.json();
+
+                    const payRes = await fetch(`${API_BASE}/api/pay`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${access_token}`
+                        },
+                        body: JSON.stringify({amount: parseFloat(amount), currency: "EUR"})
+                    });
+
+                    if (payRes.ok) {
+                        const tx = await payRes.json();
+                        setStatusMsg(`Succès : Transaction #${tx.transaction_id} validée (${tx.amount} EUR)`);
+                        fetchStatus();
+                    } else {
+                        setStatusMsg("Échec de la transaction : Service indisponible (503) !");
+                    }
+                } catch (err) {
+                    setStatusMsg("Erreur critique : API injoignable !");
+                }
+            };
+
+            const askRag = async () => {
+                setRagLoading(true);
+                setRagAnswer("Recherche documentaire LangChain & génération Ollama en cours...");
+                try {
+                    const res = await fetch(`${RAG_BASE}/rag/ask`, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({question})
+                    });
+                    const data = await res.json();
+                    setRagAnswer(`[Modèle: ${data.model}]\n${data.answer}`);
+                } catch (e) {
+                    setRagAnswer("Erreur de connexion au service RAG.");
+                }
+                setRagLoading(false);
+            };
+
+            const badgeColor = (type) => {
+                if (type === "ALERT") return "bg-red-900 text-red-200 border-red-700";
+                if (type === "ACTION") return "bg-amber-900 text-amber-200 border-amber-700";
+                if (type === "RESOLVED") return "bg-emerald-900 text-emerald-200 border-emerald-700";
+                return "bg-slate-800 text-slate-300 border-slate-700";
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto space-y-6">
+                    <header className="flex justify-between items-center bg-slate-800 p-5 rounded-xl border border-slate-700">
+                        <div>
+                            <h1 className="text-2xl font-bold text-cyan-400">PROJECT RESILIENCE-ALPHA</h1>
+                            <p className="text-sm text-slate-400">Plateforme de Paiement & Supervision Zero-Touch (ML + Ansible + RAG)</p>
+                        </div>
+                        <div className={`px-4 py-2 rounded-lg font-bold ${health === "OPERATIONAL" ? "bg-emerald-600 text-white" : "bg-red-600 text-white animate-pulse"}`}>
+                            ÉTAT DU SI : {health}
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
+                            <h2 className="text-lg font-semibold text-white">Exécuter une transaction métier</h2>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">Montant (EUR)</label>
+                                <input
+                                    type="number"
+                                    value={amount}
+                                    onChange={(e) => setAmount(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                                />
+                            </div>
+                            <button
+                                onClick={triggerPayment}
+                                className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold py-2 px-4 rounded transition"
+                            >
+                                Payer maintenant
+                            </button>
+                            {statusMsg && (
+                                <div className="p-3 bg-slate-900 rounded border border-slate-700 text-sm">
+                                    {statusMsg}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="md:col-span-2 bg-slate-800 p-5 rounded-xl border border-slate-700">
+                            <h2 className="text-lg font-semibold text-white mb-4">Journal SIEM / Détection ML AIOps & Remédiation Ansible</h2>
+                            <div className="space-y-2 max-h-56 overflow-y-auto">
+                                {events.map((ev, idx) => (
+                                    <div key={idx} className={`p-2.5 rounded border text-xs font-mono flex items-center gap-3 ${badgeColor(ev.type)}`}>
+                                        <span className="font-bold">[{ev.time}]</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-black/30 font-bold">{ev.type}</span>
+                                        <span>{ev.msg}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-3">
+                        <h2 className="text-lg font-semibold text-purple-400">Assistant IA Opérateur (RAG Local : Ollama + LangChain)</h2>
+                        <div className="flex gap-3">
+                            <input
+                                type="text"
+                                value={question}
+                                onChange={(e) => setQuestion(e.target.value)}
+                                className="flex-1 bg-slate-900 border border-slate-700 rounded p-2 text-sm text-white"
+                                placeholder="Posez une question sur les procédures d'incident, l'architecture ou le PCA/PRA..."
+                            />
+                            <button
+                                onClick={askRag}
+                                disabled={ragLoading}
+                                className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-5 rounded transition text-sm"
+                            >
+                                Interroger la doc
+                            </button>
+                        </div>
+                        {ragAnswer && (
+                            <pre className="p-3 bg-slate-900 rounded border border-slate-700 text-xs text-slate-200 whitespace-pre-wrap font-sans">
+                                {ragAnswer}
+                            </pre>
+                        )}
+                    </div>
+
+                    <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
+                        <h2 className="text-lg font-semibold text-white mb-4">Journal des transactions en temps réel</h2>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead className="border-b border-slate-700 text-slate-400">
+                                    <tr>
+                                        <th className="py-2">ID</th>
+                                        <th>Marchand</th>
+                                        <th>Montant</th>
+                                        <th>Statut</th>
+                                        <th>IP Source</th>
+                                        <th>Horodatage</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-700">
+                                    {transactions.map(t => (
+                                        <tr key={t.id}>
+                                            <td className="py-2 font-mono">#{t.id}</td>
+                                            <td>{t.merchant}</td>
+                                            <td className="font-semibold text-emerald-400">{t.amount} {t.currency}</td>
+                                            <td><span className="bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded text-xs">{t.status}</span></td>
+                                            <td className="font-mono text-xs">{t.ip}</td>
+                                            <td className="text-xs text-slate-400">{t.timestamp}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+
+</html>
